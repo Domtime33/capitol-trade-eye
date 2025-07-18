@@ -1,98 +1,76 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
-import yfinance as yf
-import os
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+import plotly.express as px
+import requests
+from bs4 import BeautifulSoup
 from datetime import datetime
 
-st.set_page_config(page_title="Capitol Trade AI", layout="wide")
+st.set_page_config(page_title="Capitol Trade Eye", layout="wide")
+st.title("👁️ Capitol Trade Eye – Live Congressional Stock Trades")
 
-# --- HEADER ---
-st.title("🏛️ Capitol Trade AI")
-st.caption("Track U.S. politician stock trades and simulate a $10,000 mirror strategy.")
+# --- Scrape most recent trades from CapitolTrades.com ---
+@st.cache_data(ttl=3600)
+def scrape_recent_trades():
+    url = "https://www.capitoltrades.com/trades"
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, "html.parser")
 
-# --- LOAD DATA ---
-@st.cache_data
-def load_trade_data():
-    data = pd.read_csv("data/congress_trades.csv")
-    data['TransactionDate'] = pd.to_datetime(data['TransactionDate'])
-    return data
+    rows = soup.select("div.sc-ikJyIC")  # Each trade row
+    data = []
 
-df = load_trade_data()
+    for row in rows:
+        try:
+            name = row.select_one("a.sc-himrzO").text.strip()
+            ticker = row.select_one("a.sc-himrzO + span").text.strip().replace("(", "").replace(")", "")
+            transaction = row.find("span", string=lambda t: t and "Purchase" in t or "Sale" in t).text.strip()
+            date_text = row.find("span", string=lambda t: t and "Reported" in t).text.replace("Reported", "").strip()
+            reported_date = datetime.strptime(date_text, "%b %d, %Y")
+            party = row.select_one("div.sc-jUosCB").text.strip()
 
-# --- USER INPUTS ---
-politicians = df['Representative'].dropna().unique().tolist()
-selected = st.multiselect("Select Politicians", politicians, default=politicians[:3])
-days = st.radio("Trend Chart", ["1 Day", "30 Days", "6 Months"], horizontal=True)
-fund = st.slider("Mirror Strategy Investment Amount", 1000, 10000, 10000, step=500)
-
-# --- FILTERED DATA ---
-filtered = df[df['Representative'].isin(selected)].copy()
-filtered = filtered.sort_values(by="TransactionDate", ascending=False)
-
-# --- ALLOCATION CALCULATION ---
-num_trades = filtered.shape[0]
-filtered["Allocation ($)"] = (fund / num_trades).round(2) if num_trades else 0
-
-# --- DISPLAY DATA ---
-st.subheader("📊 Trade Table")
-st.dataframe(
-    filtered[["Representative", "TransactionDate", "Ticker", "Transaction", "Amount", "Allocation ($)"]],
-    use_container_width=True
-)
-
-# --- STOCK TREND CHARTS ---
-st.subheader("📈 Stock Trend Viewer")
-
-for ticker in filtered['Ticker'].unique():
-    if pd.isna(ticker) or ticker.strip() == "":
-        continue
-
-    stock = yf.Ticker(ticker.strip())
-    period = {"1 Day": "1d", "30 Days": "1mo", "6 Months": "6mo"}[days]
-
-    try:
-        hist = stock.history(period=period)
-        if hist.empty:
+            data.append({
+                "Name": name,
+                "Ticker": ticker,
+                "Transaction": transaction,
+                "Reported Date": reported_date,
+                "Party": party
+            })
+        except:
             continue
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], name=ticker.upper()))
-        fig.update_layout(
-            title=f"{ticker.upper()} - {days} Trend",
-            xaxis_title="Date",
-            yaxis_title="Price ($)",
-            showlegend=False
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    except Exception as e:
-        st.warning(f"Could not retrieve data for {ticker}: {e}")
+    return pd.DataFrame(data)
 
-# --- EMAIL TEST BUTTON ---
-with st.expander("📧 Email Test (Admin Only)"):
-    recipient = st.text_input("Test Recipient Email")
-    if st.button("Send Test Email"):
-        if recipient:
-            try:
-                def send_email(subject, content, recipient_email):
-                    message = Mail(
-                        from_email=st.secrets["sendgrid"]["sender_email"],
-                        to_emails=recipient_email,
-                        subject=subject,
-                        html_content=content
-                    )
-                    sg = SendGridAPIClient(st.secrets["sendgrid"]["api_key"])
-                    return sg.send(message)
+df = scrape_recent_trades()
 
-                response = send_email("Test from Capitol Trade AI", "This is a test email.", recipient)
-                st.success("Test email sent successfully!")
-            except Exception as e:
-                st.error(f"Email failed: {e}")
-        else:
-            st.warning("Enter a recipient email.")
+if df.empty:
+    st.warning("No recent trade data available right now. Please try again later.")
+    st.stop()
 
-# --- FOOTER ---
-st.markdown("---")
-st.caption("© 2025 Capitol Trade AI — Built for transparency.")
+# --- Sidebar filters ---
+with st.sidebar:
+    st.header("🔍 Filter Options")
+    tickers = sorted(df["Ticker"].unique())
+    selected_tickers = st.multiselect("Filter by Ticker", tickers, default=tickers)
+    parties = sorted(df["Party"].unique())
+    selected_parties = st.multiselect("Filter by Party", parties, default=parties)
+
+# --- Filtered Data ---
+filtered_df = df[
+    (df["Ticker"].isin(selected_tickers)) &
+    (df["Party"].isin(selected_parties))
+]
+
+st.markdown("### 📈 Latest Trades")
+st.dataframe(filtered_df, use_container_width=True)
+
+# --- Plotly Chart ---
+fig = px.histogram(
+    filtered_df,
+    x="Ticker",
+    color="Transaction",
+    barmode="group",
+    title="🗳️ Trades by Ticker & Type",
+)
+st.plotly_chart(fig, use_container_width=True)
