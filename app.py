@@ -1,58 +1,98 @@
 import streamlit as st
 import pandas as pd
-import datetime
+import plotly.graph_objects as go
+import yfinance as yf
+import os
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+from datetime import datetime
 
 st.set_page_config(page_title="Capitol Trade AI", layout="wide")
 
-st.title("📈 Capitol Trade AI")
-st.subheader("Tracking Stock Moves by U.S. Politicians")
+# --- HEADER ---
+st.title("🏛️ Capitol Trade AI")
+st.caption("Track U.S. politician stock trades and simulate a $10,000 mirror strategy.")
 
-# Simulated daily email summary
-today = datetime.date.today().strftime("%B %d, %Y")
+# --- LOAD DATA ---
+@st.cache_data
+def load_trade_data():
+    data = pd.read_csv("data/congress_trades.csv")
+    data['TransactionDate'] = pd.to_datetime(data['TransactionDate'])
+    return data
 
-st.markdown(f"### 📬 Daily Summary for {today}")
+df = load_trade_data()
 
-data = {
-    "Name": ["Nancy Pelosi", "Josh Hawley", "Dan Crenshaw"],
-    "Stock": ["NVDA", "AAPL", "MSFT"],
-    "Action": ["Buy", "Sell", "Buy"],
-    "Amount": ["$250,000", "$100,000", "$150,000"],
-    "Date": [today, today, today]
-}
+# --- USER INPUTS ---
+politicians = df['Representative'].dropna().unique().tolist()
+selected = st.multiselect("Select Politicians", politicians, default=politicians[:3])
+days = st.radio("Trend Chart", ["1 Day", "30 Days", "6 Months"], horizontal=True)
+fund = st.slider("Mirror Strategy Investment Amount", 1000, 10000, 10000, step=500)
 
-df = pd.DataFrame(data)
+# --- FILTERED DATA ---
+filtered = df[df['Representative'].isin(selected)].copy()
+filtered = filtered.sort_values(by="TransactionDate", ascending=False)
 
-st.dataframe(df, use_container_width=True)
+# --- ALLOCATION CALCULATION ---
+num_trades = filtered.shape[0]
+filtered["Allocation ($)"] = (fund / num_trades).round(2) if num_trades else 0
 
-st.markdown("---")
-st.markdown("📧 You will receive email alerts as new trades are published.")
+# --- DISPLAY DATA ---
+st.subheader("📊 Trade Table")
+st.dataframe(
+    filtered[["Representative", "TransactionDate", "Ticker", "Transaction", "Amount", "Allocation ($)"]],
+    use_container_width=True
+)
 
-st.caption("Data provided by Capitol Trade AI • Not financial advice.")
-import streamlit as st
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+# --- STOCK TREND CHARTS ---
+st.subheader("📈 Stock Trend Viewer")
 
-def send_email(subject, content, to_email):
-    message = Mail(
-        from_email=st.secrets["sendgrid"]["sender_email"],
-        to_emails=to_email,
-        subject=subject,
-        plain_text_content=content
-    )
+for ticker in filtered['Ticker'].unique():
+    if pd.isna(ticker) or ticker.strip() == "":
+        continue
+
+    stock = yf.Ticker(ticker.strip())
+    period = {"1 Day": "1d", "30 Days": "1mo", "6 Months": "6mo"}[days]
+
     try:
-        sg = SendGridAPIClient(st.secrets["sendgrid"]["api_key"])
-        response = sg.send(message)
-        return response.status_code
+        hist = stock.history(period=period)
+        if hist.empty:
+            continue
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], name=ticker.upper()))
+        fig.update_layout(
+            title=f"{ticker.upper()} - {days} Trend",
+            xaxis_title="Date",
+            yaxis_title="Price ($)",
+            showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
-        return str(e)
+        st.warning(f"Could not retrieve data for {ticker}: {e}")
 
-# Streamlit Test Button
-st.header("📧 SendGrid Email Test")
+# --- EMAIL TEST BUTTON ---
+with st.expander("📧 Email Test (Admin Only)"):
+    recipient = st.text_input("Test Recipient Email")
+    if st.button("Send Test Email"):
+        if recipient:
+            try:
+                def send_email(subject, content, recipient_email):
+                    message = Mail(
+                        from_email=st.secrets["sendgrid"]["sender_email"],
+                        to_emails=recipient_email,
+                        subject=subject,
+                        html_content=content
+                    )
+                    sg = SendGridAPIClient(st.secrets["sendgrid"]["api_key"])
+                    return sg.send(message)
 
-recipient = st.text_input("Enter recipient email")
-if st.button("Send Test Email"):
-    if recipient:
-        status = send_email("Test from Capitol Trade AI", "This is a test email.", recipient)
-        st.success(f"Email sent! Status: {status}")
-    else:
-        st.warning("Please enter a recipient email.")
+                response = send_email("Test from Capitol Trade AI", "This is a test email.", recipient)
+                st.success("Test email sent successfully!")
+            except Exception as e:
+                st.error(f"Email failed: {e}")
+        else:
+            st.warning("Enter a recipient email.")
+
+# --- FOOTER ---
+st.markdown("---")
+st.caption("© 2025 Capitol Trade AI — Built for transparency.")
