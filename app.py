@@ -1,34 +1,40 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import requests
-from bs4 import BeautifulSoup
 from datetime import datetime
+import plotly.express as px
+import undetected_chromedriver as uc
+from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="Capitol Trade Eye", layout="wide")
-st.title("👁️ Capitol Trade Eye – Live Congressional Stock Trades")
 
-# --- Scrape most recent trades from CapitolTrades.com ---
+# -----------------------------
+# Scraper function using Selenium
+# -----------------------------
 @st.cache_data(ttl=3600)
 def scrape_recent_trades():
-    url = "https://www.capitoltrades.com/trades"
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.text, "html.parser")
+    options = uc.ChromeOptions()
+    options.headless = True
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
 
-    rows = soup.select("div.sc-ikJyIC")  # Each trade row
+    driver = uc.Chrome(options=options)
+    driver.get("https://www.capitoltrades.com/trades")
+    driver.implicitly_wait(10)
+
+    soup = BeautifulSoup(driver.page_source, "html.parser")
+    driver.quit()
+
+    rows = soup.select("div[class*=TradeRow__TradeRowWrapper]")
     data = []
 
     for row in rows:
         try:
-            name = row.select_one("a.sc-himrzO").text.strip()
-            ticker = row.select_one("a.sc-himrzO + span").text.strip().replace("(", "").replace(")", "")
-            transaction = row.find("span", string=lambda t: t and "Purchase" in t or "Sale" in t).text.strip()
-            date_text = row.find("span", string=lambda t: t and "Reported" in t).text.replace("Reported", "").strip()
+            name = row.select_one("a[class*=Link__StyledLink]").text.strip()
+            ticker = row.select_one("span[class*=TradeRow__Ticker]").text.strip()
+            transaction = row.select_one("span[class*=TransactionType]").text.strip()
+            date_text = row.select_one("span[class*=ReportedDate]").text.strip().replace("Reported", "").strip()
             reported_date = datetime.strptime(date_text, "%b %d, %Y")
-            party = row.select_one("div.sc-jUosCB").text.strip()
+            party = row.select_one("div[class*=TradeRow__MemberDetails]").text.strip().split("\n")[0]
 
             data.append({
                 "Name": name,
@@ -42,35 +48,44 @@ def scrape_recent_trades():
 
     return pd.DataFrame(data)
 
-df = scrape_recent_trades()
+# -----------------------------
+# Streamlit UI
+# -----------------------------
+st.title("📊 Capitol Trade Eye")
+st.markdown("Live dashboard for real-time U.S. Congress stock trade disclosures.")
+
+with st.spinner("🔍 Scraping latest trades..."):
+    df = scrape_recent_trades()
 
 if df.empty:
-    st.warning("No recent trade data available right now. Please try again later.")
+    st.error("❌ No recent trade data available. Please try again later.")
     st.stop()
 
-# --- Sidebar filters ---
-with st.sidebar:
-    st.header("🔍 Filter Options")
-    tickers = sorted(df["Ticker"].unique())
-    selected_tickers = st.multiselect("Filter by Ticker", tickers, default=tickers)
-    parties = sorted(df["Party"].unique())
-    selected_parties = st.multiselect("Filter by Party", parties, default=parties)
+# Date filter
+min_date = df["Reported Date"].min()
+max_date = df["Reported Date"].max()
+start_date, end_date = st.date_input("Filter by reported date range:", [min_date, max_date])
 
-# --- Filtered Data ---
-filtered_df = df[
-    (df["Ticker"].isin(selected_tickers)) &
-    (df["Party"].isin(selected_parties))
-]
+filtered_df = df[(df["Reported Date"] >= pd.to_datetime(start_date)) &
+                 (df["Reported Date"] <= pd.to_datetime(end_date))]
 
-st.markdown("### 📈 Latest Trades")
-st.dataframe(filtered_df, use_container_width=True)
+# Show trades
+st.subheader("📋 Recent Trades")
+st.dataframe(filtered_df.sort_values("Reported Date", ascending=False), use_container_width=True)
 
-# --- Plotly Chart ---
-fig = px.histogram(
-    filtered_df,
-    x="Ticker",
-    color="Transaction",
-    barmode="group",
-    title="🗳️ Trades by Ticker & Type",
-)
+# Grouped summary
+st.subheader("📈 Trade Volume by Ticker")
+trade_counts = filtered_df["Ticker"].value_counts().reset_index()
+trade_counts.columns = ["Ticker", "Number of Trades"]
+
+fig = px.bar(trade_counts, x="Ticker", y="Number of Trades", title="Most Traded Stocks", text="Number of Trades")
 st.plotly_chart(fig, use_container_width=True)
+
+# Filter by politician
+st.subheader("🧑‍⚖️ View by Member of Congress")
+member_list = filtered_df["Name"].unique()
+selected_member = st.selectbox("Select a member", sorted(member_list))
+
+member_trades = filtered_df[filtered_df["Name"] == selected_member]
+st.write(f"Trades by **{selected_member}**:")
+st.dataframe(member_trades.sort_values("Reported Date", ascending=False), use_container_width=True)
