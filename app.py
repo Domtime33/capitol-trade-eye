@@ -1,91 +1,69 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 import plotly.express as px
-import undetected_chromedriver as uc
-from bs4 import BeautifulSoup
+import requests
+from datetime import datetime
 
-st.set_page_config(page_title="Capitol Trade Eye", layout="wide")
+# ---- CONFIG ----
+API_URL = "https://api.quiverquant.com/beta/live/congresstrading"
+API_KEY = "demo"  # Public demo key — limited access
 
-# -----------------------------
-# Scraper function using Selenium
-# -----------------------------
+# ---- LOAD DATA ----
 @st.cache_data(ttl=3600)
-def scrape_recent_trades():
-    options = uc.ChromeOptions()
-    options.headless = True
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+def load_trade_data():
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    response = requests.get(API_URL, headers=headers)
 
-    driver = uc.Chrome(options=options)
-    driver.get("https://www.capitoltrades.com/trades")
-    driver.implicitly_wait(10)
+    if response.status_code != 200:
+        st.error("Failed to fetch data from QuiverQuant API.")
+        return pd.DataFrame()
 
-    soup = BeautifulSoup(driver.page_source, "html.parser")
-    driver.quit()
+    data = response.json()
+    df = pd.DataFrame(data)
 
-    rows = soup.select("div[class*=TradeRow__TradeRowWrapper]")
-    data = []
+    if df.empty:
+        return df
 
-    for row in rows:
-        try:
-            name = row.select_one("a[class*=Link__StyledLink]").text.strip()
-            ticker = row.select_one("span[class*=TradeRow__Ticker]").text.strip()
-            transaction = row.select_one("span[class*=TransactionType]").text.strip()
-            date_text = row.select_one("span[class*=ReportedDate]").text.strip().replace("Reported", "").strip()
-            reported_date = datetime.strptime(date_text, "%b %d, %Y")
-            party = row.select_one("div[class*=TradeRow__MemberDetails]").text.strip().split("\n")[0]
+    df['TransactionDate'] = pd.to_datetime(df['TransactionDate'])
+    df['Amount'] = df['Range'].fillna("Unknown")
+    return df
 
-            data.append({
-                "Name": name,
-                "Ticker": ticker,
-                "Transaction": transaction,
-                "Reported Date": reported_date,
-                "Party": party
-            })
-        except:
-            continue
-
-    return pd.DataFrame(data)
-
-# -----------------------------
-# Streamlit UI
-# -----------------------------
+# ---- UI ----
+st.set_page_config(page_title="Capitol Trade Eye", layout="wide")
 st.title("📊 Capitol Trade Eye")
-st.markdown("Live dashboard for real-time U.S. Congress stock trade disclosures.")
+st.markdown("Live updates on U.S. Congress stock trades from [QuiverQuant](https://www.quiverquant.com/)")
 
-with st.spinner("🔍 Scraping latest trades..."):
-    df = scrape_recent_trades()
+df = load_trade_data()
 
 if df.empty:
-    st.error("❌ No recent trade data available. Please try again later.")
+    st.warning("No recent trade data available right now. Please try again later.")
     st.stop()
 
-# Date filter
-min_date = df["Reported Date"].min()
-max_date = df["Reported Date"].max()
-start_date, end_date = st.date_input("Filter by reported date range:", [min_date, max_date])
+# ---- FILTERS ----
+col1, col2 = st.columns(2)
+with col1:
+    selected_person = st.selectbox("Filter by Congressperson", ["All"] + sorted(df['Representative'].unique()))
+with col2:
+    selected_ticker = st.selectbox("Filter by Ticker", ["All"] + sorted(df['Ticker'].dropna().unique()))
 
-filtered_df = df[(df["Reported Date"] >= pd.to_datetime(start_date)) &
-                 (df["Reported Date"] <= pd.to_datetime(end_date))]
+filtered_df = df.copy()
+if selected_person != "All":
+    filtered_df = filtered_df[filtered_df['Representative'] == selected_person]
+if selected_ticker != "All":
+    filtered_df = filtered_df[filtered_df['Ticker'] == selected_ticker]
 
-# Show trades
-st.subheader("📋 Recent Trades")
-st.dataframe(filtered_df.sort_values("Reported Date", ascending=False), use_container_width=True)
-
-# Grouped summary
-st.subheader("📈 Trade Volume by Ticker")
-trade_counts = filtered_df["Ticker"].value_counts().reset_index()
-trade_counts.columns = ["Ticker", "Number of Trades"]
-
-fig = px.bar(trade_counts, x="Ticker", y="Number of Trades", title="Most Traded Stocks", text="Number of Trades")
+# ---- PLOT ----
+st.subheader("Trade Timeline")
+fig = px.scatter(
+    filtered_df,
+    x="TransactionDate",
+    y="Ticker",
+    color="Representative",
+    hover_data=["Amount", "Transaction", "Representative"],
+    title="Congressional Trades Over Time"
+)
 st.plotly_chart(fig, use_container_width=True)
 
-# Filter by politician
-st.subheader("🧑‍⚖️ View by Member of Congress")
-member_list = filtered_df["Name"].unique()
-selected_member = st.selectbox("Select a member", sorted(member_list))
-
-member_trades = filtered_df[filtered_df["Name"] == selected_member]
-st.write(f"Trades by **{selected_member}**:")
-st.dataframe(member_trades.sort_values("Reported Date", ascending=False), use_container_width=True)
+# ---- TABLE ----
+st.subheader("Trade Details")
+st.dataframe(filtered_df.sort_values("TransactionDate", ascending=False), use_container_width=True)
