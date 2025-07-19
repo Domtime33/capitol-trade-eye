@@ -1,48 +1,37 @@
 import streamlit as st
 import pandas as pd
 import requests
-from datetime import datetime
+import plotly.express as px
 
-st.set_page_config(page_title="Capitol Trade Eye", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Capitol Trade Eye", layout="wide")
 
-st.markdown(
-    "<h1 style='text-align: center; color: white;'>Capitol Trade Eye</h1>",
-    unsafe_allow_html=True,
-)
-st.markdown(
-    "<p style='text-align: center;'>Live updates on U.S. Congress stock trades from public disclosure sources.</p>",
-    unsafe_allow_html=True,
-)
+st.markdown("<h1 style='text-align: center;'>📊 Capitol Trade Eye</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>Live updates on U.S. Congress stock trades from <a href='https://www.quiverquant.com/' target='_blank'>QuiverQuant</a></p>", unsafe_allow_html=True)
 
-@st.cache_data(ttl=3600)
-def fetch_senate_data():
+API_URL = "https://api.quiverquant.com/beta/historical/congresstrading"
+HEADERS = {"accept": "application/json"}
+
+def fetch_congress_trades():
     try:
-        url = "https://senatestockwatcher.com/api/transactions"
-        response = requests.get(url)
-        if response.status_code == 200:
-            return pd.DataFrame(response.json())
-        return None
+        response = requests.get(API_URL, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
-        st.error(f"Error fetching Senate data: {e}")
-        return None
+        st.error(f"Failed to fetch data from QuiverQuant API.\n\nError: {str(e)}")
+        return []
 
-df = fetch_senate_data()
+data = fetch_congress_trades()
 
-if df is None or df.empty:
-    st.error("No recent trade data available right now. Please try again later.")
+if not data:
+    st.warning("⚠️ No recent trade data available right now. Please try again later.")
 else:
-    df["transaction_date"] = pd.to_datetime(df["transaction_date"])
-    df.sort_values("transaction_date", ascending=False, inplace=True)
+    df = pd.DataFrame(data)
+    df['TransactionDate'] = pd.to_datetime(df['TransactionDate'])
 
-    st.success(f"Showing {len(df)} recent Senate transactions.")
-    st.dataframe(df[[
-        "senator", "ticker", "type", "amount", "transaction_date", "asset_description"
-    ]].rename(columns={
-        "senator": "Senator",
-        "ticker": "Ticker",
-        "type": "Type",
-        "amount": "Amount",
-        "transaction_date": "Date",
-        "asset_description": "Asset Description"
-    }))
+    # Display summary
+    st.subheader("🗓️ Latest Trades")
+    st.dataframe(df.sort_values("TransactionDate", ascending=False).head(15), use_container_width=True)
 
+    # Plot trade volume by ticker
+    fig = px.histogram(df, x="Ticker", title="Most Traded Stocks by Congress", nbins=50)
+    st.plotly_chart(fig, use_container_width=True)
