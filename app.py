@@ -45,3 +45,8 @@ if tickers:
         st.info("No strong patterns to recommend.")
 else:
     st.info("No tickers found in last 7 days.")
+from email_sender import send_email_report
+
+# Send once daily
+if not data.empty and not recommendations.empty:
+    send_email_report(recommendations)
