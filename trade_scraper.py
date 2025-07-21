@@ -1,28 +1,16 @@
-import requests
 import pandas as pd
-import json
-from datetime import datetime
+import os
 
-CACHE_FILE = "cache.json"
+CACHE_FILE = "cached_data.csv"
 
 def get_all_trade_data():
-    url = "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
-    response = requests.get(url)
-    trades = response.json()
+    # Replace with real scraper logic or static fallback
+    return pd.read_csv("sample_disclosures.csv")  # <-- Ensure this file exists
 
-    df = pd.DataFrame(trades)
-    df['Transaction Date'] = pd.to_datetime(df['transaction_date'])
-    df = df[df['ticker'].notna()]
-    df = df[df['transaction'].isin(["Purchase", "Sale"])]
-    return df
-
-def save_to_cache(df):
-    df.to_json(CACHE_FILE, orient='records')
+def save_to_cache(data):
+    data.to_csv(CACHE_FILE, index=False)
 
 def get_cached_data():
-    try:
-        with open(CACHE_FILE, 'r') as f:
-            cached = json.load(f)
-        return pd.DataFrame(cached)
-    except:
-        return pd.DataFrame()
+    if os.path.exists(CACHE_FILE):
+        return pd.read_csv(CACHE_FILE)
+    return pd.DataFrame()
