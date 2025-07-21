@@ -1,26 +1,19 @@
-import sendgrid
-from sendgrid.helpers.mail import Mail
-import pandas as pd
-import os
+import smtplib
+from email.mime.text import MIMEText
 
-def send_email_report(df):
-    if df.empty:
-        return
+def send_email(to_email, subject, body):
+    from_email = "domsoccerplayer@gmail.com"
+    smtp_server = "smtp.sendgrid.net"
+    smtp_port = 587
+    smtp_username = "apikey"
+    smtp_password = "YOUR_SENDGRID_API_KEY"  # 🔐 Replace with actual SendGrid API key
 
-    content = "📈 Daily Capitol Trade Picks\n\n"
-    for _, row in df.iterrows():
-        content += f"{row['Ticker']}: Buy {row['Buy Qty']} shares @ ${row['Price']} = ${row['Investment']}\n"
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = from_email
+    msg["To"] = to_email
 
-    message = Mail(
-        from_email="capitol@yourapp.com",
-        to_emails="domsoccerplayer@gmail.com",
-        subject="Capitol Trade AI – Daily Picks",
-        plain_text_content=content
-    )
-
-    try:
-        sg = sendgrid.SendGridAPIClient(api_key=os.getenv("SENDGRID_API_KEY"))
-        response = sg.send(message)
-        return response.status_code
-    except Exception as e:
-        print(f"Email failed: {e}")
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_username, smtp_password)
+        server.send_message(msg)
