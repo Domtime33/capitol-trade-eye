@@ -1,24 +1,21 @@
 import pandas as pd
-import re
+import random
 
 def extract_tickers_from_disclosures(df):
-    tickers = []
-    for text in df['Asset Description'].astype(str):
-        found = re.findall(r'\b[A-Z]{1,5}\b', text)
-        tickers.extend(found)
-    return sorted(list(set(tickers)))
+    tickers = df['ticker'].dropna().unique().tolist()
+    return [t for t in tickers if t.isalpha()]
 
-def generate_recommendations(tickers, df):
-    recommendations = []
-    for ticker in tickers:
-        subset = df[df['Asset Description'].str.contains(ticker, na=False)]
-        total = len(subset)
-        buy_count = len(subset[subset['Transaction'] == 'Purchase'])
-        sell_count = len(subset[subset['Transaction'] == 'Sale'])
+def generate_recommendations(tickers, df, budget=10000):
+    if not tickers:
+        return pd.DataFrame()
 
-        if buy_count > sell_count:
-            recommendations.append({'Ticker': ticker, 'Action': 'Buy', 'Mentions': total})
-        elif sell_count > buy_count:
-            recommendations.append({'Ticker': ticker, 'Action': 'Sell', 'Mentions': total})
-    
-    return pd.DataFrame(recommendations)
+    n = len(tickers)
+    allocation = budget / n
+
+    data = {
+        "Ticker": tickers,
+        "Buy Amount ($)": [round(allocation, 2)] * n,
+        "Rationale": [f"Mentioned in {df[df['ticker'] == t].shape[0]} recent trades" for t in tickers]
+    }
+
+    return pd.DataFrame(data)
