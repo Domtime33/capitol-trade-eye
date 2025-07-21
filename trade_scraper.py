@@ -1,22 +1,22 @@
+import requests
 import pandas as pd
-import os
 from datetime import datetime
-import json
-
-CACHE_FILE = "cached_trades.csv"
+from bs4 import BeautifulSoup
 
 def get_all_trade_data():
-    # Simulated or scraped trade data (replace with real scraper later)
-    data = pd.read_csv("sample_trades.csv")  # Replace with actual scraping logic
-    data['Transaction Date'] = pd.to_datetime(data['Transaction Date'])
-    return data
-
-def save_to_cache(data):
-    data.to_csv(CACHE_FILE, index=False)
+    # Example scraping from House stock watcher JSON
+    url = "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
+    r = requests.get(url)
+    trades = r.json()
+    df = pd.DataFrame(trades)
+    df['Transaction Date'] = pd.to_datetime(df['transaction_date'])
+    return df
 
 def get_cached_data():
-    if os.path.exists(CACHE_FILE):
-        data = pd.read_csv(CACHE_FILE)
-        data['Transaction Date'] = pd.to_datetime(data['Transaction Date'])
-        return data
-    return pd.DataFrame()
+    try:
+        return pd.read_csv("cached_data.csv", parse_dates=['Transaction Date'])
+    except:
+        return pd.DataFrame()
+
+def save_to_cache(df):
+    df.to_csv("cached_data.csv", index=False)
